@@ -1,0 +1,36 @@
+{
+  "schema_version": 1,
+  "dataset_version": "network-diagnostics-v1",
+  "scenarios": {
+    "healthy": {
+      "route": {"passed": true, "evidence": "宛先CIDRに一致するルートと転送先がある"},
+      "dns": {"passed": true, "evidence": "期待するプライベート名が想定したIPアドレスへ解決される"},
+      "security": {"passed": true, "evidence": "セキュリティグループとネットワークACLが確認対象の通信を許可している"},
+      "reachability": {"passed": true, "evidence": "固定した到達性の観測結果が宛先まで到達している"}
+    },
+    "route-missing": {
+      "route": {"passed": false, "evidence": "宛先CIDRに一致するルートがない"},
+      "dns": {"passed": true, "evidence": "期待するプライベート名が想定したIPアドレスへ解決される"},
+      "security": {"passed": true, "evidence": "セキュリティグループとネットワークACLが確認対象の通信を許可している"},
+      "reachability": {"passed": false, "evidence": "ルートがないため経路を先へ進めない"}
+    },
+    "dns-forwarding-missing": {
+      "route": {"passed": true, "evidence": "宛先CIDRに一致するルートと転送先がある"},
+      "dns": {"passed": false, "evidence": "オンプレミス側のドメイン名に一致するDNS転送ルールがない"},
+      "security": {"passed": true, "evidence": "セキュリティグループとネットワークACLが確認対象の通信を許可している"},
+      "reachability": {"passed": false, "evidence": "アプリケーションが宛先IPアドレスを取得できない"}
+    },
+    "security-blocked": {
+      "route": {"passed": true, "evidence": "宛先CIDRに一致するルートと転送先がある"},
+      "dns": {"passed": true, "evidence": "期待するプライベート名が想定したIPアドレスへ解決される"},
+      "security": {"passed": false, "evidence": "宛先のセキュリティグループが確認対象のポートを許可していない"},
+      "reachability": {"passed": false, "evidence": "固定した経路が宛先側のセキュリティ制御で止まっている"}
+    },
+    "reachability-blocked": {
+      "route": {"passed": true, "evidence": "宛先CIDRに一致するルートと転送先がある"},
+      "dns": {"passed": true, "evidence": "期待するプライベート名が想定したIPアドレスへ解決される"},
+      "security": {"passed": true, "evidence": "セキュリティグループとネットワークACLが確認対象の通信を許可している"},
+      "reachability": {"passed": false, "evidence": "固定した経路の中継先が利用できないと観測された"}
+    }
+  }
+}
