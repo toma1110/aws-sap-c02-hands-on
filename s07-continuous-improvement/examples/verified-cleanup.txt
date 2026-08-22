@@ -1,0 +1,3 @@
+cleanup residual: lambda=0
+cleanup residual: log_group=0
+cleanup residual: iam_role=0

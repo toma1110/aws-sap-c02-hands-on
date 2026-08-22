@@ -2,10 +2,12 @@
 set -euo pipefail
 
 REGION="${AWS_REGION:-ap-northeast-1}"
+EXPECTED_ACCOUNT_ID="${EXPECTED_ACCOUNT_ID:-}"
 LAB_ID="${LAB_ID:-${USER:-learner}}"
 SAFE_ID="$(printf '%s' "$LAB_ID" | tr -cd '[:alnum:]-' | cut -c1-24)"
 FUNCTION_NAME="sap-c02-s07-${SAFE_ID}"
 ROLE_NAME="sap-c02-s07-${SAFE_ID}"
+LOG_GROUP_NAME="/aws/lambda/${FUNCTION_NAME}"
 POLICY_ARN="arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole"
 
 if [[ ! "$FUNCTION_NAME" =~ ^sap-c02-s07-[A-Za-z0-9][A-Za-z0-9-]{0,23}$ ]]; then
@@ -14,6 +16,14 @@ if [[ ! "$FUNCTION_NAME" =~ ^sap-c02-s07-[A-Za-z0-9][A-Za-z0-9-]{0,23}$ ]]; then
 fi
 
 ACCOUNT_ID="$(aws sts get-caller-identity --query Account --output text)"
+if [[ ! "$EXPECTED_ACCOUNT_ID" =~ ^[0-9]{12}$ ]]; then
+  echo "EXPECTED_ACCOUNT_IDにSTSで確認した12桁のaccount IDを設定してください。" >&2
+  exit 1
+fi
+if [[ "$ACCOUNT_ID" != "$EXPECTED_ACCOUNT_ID" ]]; then
+  echo "現在のAWS accountがEXPECTED_ACCOUNT_IDと一致しないため作成を停止します。" >&2
+  exit 1
+fi
 printf 'Account: %s\nRegion: %s\nFunction: %s\nRole: %s\n' "$ACCOUNT_ID" "$REGION" "$FUNCTION_NAME" "$ROLE_NAME"
 
 if aws lambda get-function --region "$REGION" --function-name "$FUNCTION_NAME" >/dev/null 2>&1; then
@@ -25,8 +35,8 @@ if aws iam get-role --role-name "$ROLE_NAME" >/dev/null 2>&1; then
   exit 1
 fi
 LOG_COUNT="$(MSYS2_ARG_CONV_EXCL='*' aws logs describe-log-groups --region "$REGION" \
-  --log-group-name-prefix "/aws/lambda/${FUNCTION_NAME}" \
-  --query "length(logGroups[?logGroupName=='/aws/lambda/${FUNCTION_NAME}'])" --output text)"
+  --log-group-name-prefix "$LOG_GROUP_NAME" \
+  --query "length(logGroups[?logGroupName=='${LOG_GROUP_NAME}'])" --output text)"
 if [[ "$LOG_COUNT" != 0 ]]; then
   echo "同名のlog groupが既にあります。所有者を確認し、別のLAB_IDを使用してください。" >&2
   exit 1
@@ -77,4 +87,8 @@ for attempt in {1..12}; do
 done
 
 aws lambda wait function-active-v2 --region "$REGION" --function-name "$FUNCTION_NAME"
+aws logs create-log-group \
+  --region "$REGION" \
+  --log-group-name "$LOG_GROUP_NAME" \
+  --tags Course=aws-sap-c02,HandsOn=s07-continuous-improvement
 echo "作成完了: memory=128 MB"

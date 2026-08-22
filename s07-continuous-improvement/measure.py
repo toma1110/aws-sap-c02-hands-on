@@ -17,17 +17,22 @@ REPORT = re.compile(
 def invoke(function_name, region, iterations):
     response_file = tempfile.NamedTemporaryFile(suffix=".json", delete=False)
     response_file.close()
-    command = [
-        "aws", "lambda", "invoke", "--region", region,
-        "--function-name", function_name, "--log-type", "Tail",
-        "--cli-binary-format", "raw-in-base64-out",
-        "--payload", json.dumps({"iterations": iterations}),
-        "--output", "json", response_file.name,
-    ]
-    metadata = json.loads(subprocess.check_output(command, text=True))
-    with open(response_file.name, encoding="utf-8") as stream:
-        response = json.load(stream)
-    os.unlink(response_file.name)
+    try:
+        command = [
+            "aws", "lambda", "invoke", "--region", region,
+            "--function-name", function_name, "--log-type", "Tail",
+            "--cli-binary-format", "raw-in-base64-out",
+            "--payload", json.dumps({"iterations": iterations}),
+            "--output", "json", response_file.name,
+        ]
+        metadata = json.loads(subprocess.check_output(command, text=True))
+        with open(response_file.name, encoding="utf-8") as stream:
+            response = json.load(stream)
+    finally:
+        try:
+            os.unlink(response_file.name)
+        except FileNotFoundError:
+            pass
     log = base64.b64decode(metadata["LogResult"]).decode("utf-8", errors="replace")
     match = REPORT.search(log.replace("\n", " "))
     if not match:

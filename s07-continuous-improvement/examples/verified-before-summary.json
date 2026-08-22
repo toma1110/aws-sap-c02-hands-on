@@ -1,0 +1,14 @@
+{
+  "fixed_conditions": {
+    "iterations": 250000,
+    "samples": 8,
+    "warmup_excluded": 1
+  },
+  "summary": {
+    "memory_mb": 128,
+    "median_duration_ms": 2636.13,
+    "median_billed_duration_ms": 2636.5,
+    "max_memory_used_mb": 42,
+    "median_cost_proxy_mb_ms": 337472.0
+  }
+}

@@ -1,0 +1,16 @@
+{
+  "fixed_conditions_match": true,
+  "result_checksum_match": true,
+  "change": "Lambda memory 128 MB -> 512 MB",
+  "median_duration_ms": {
+    "before": 2636.13,
+    "after": 631.265
+  },
+  "latency_improvement_percent": 76.1,
+  "median_cost_proxy_mb_ms": {
+    "before": 337472.0,
+    "after": 323328.0
+  },
+  "cost_proxy_change_percent": -4.2,
+  "side_effect_to_check": "メモリ増加で応答時間は短縮しても、GB秒相当の費用が増える場合がある"
+}
