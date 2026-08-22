@@ -228,6 +228,8 @@ class ControlPlane:
         group = observation["security_group"]["SecurityGroups"][0]
         return {
             "boundary": observation["boundary"],
+            "vpc_cidr": observation["vpc"]["Vpcs"][0]["CidrBlock"],
+            "subnet_cidr": observation["subnet"]["Subnets"][0]["CidrBlock"],
             "dns_support": observation["dns_support"]["EnableDnsSupport"]["Value"],
             "dns_hostnames": observation["dns_hostnames"]["EnableDnsHostnames"]["Value"],
             "routes": [{"destination": item.get("DestinationCidrBlock"), "gateway": item.get("GatewayId"), "state": item.get("State")} for item in route["Routes"]],

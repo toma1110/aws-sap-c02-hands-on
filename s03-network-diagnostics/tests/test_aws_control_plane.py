@@ -130,6 +130,55 @@ class ControlPlaneSafetyTests(unittest.TestCase):
         with self.assertRaises(SafetyError):
             self.control.residual(attempts=1, delay_seconds=0)
 
+    def test_observe_exposes_documented_cidrs_and_raw_field_paths(self) -> None:
+        payload = state()
+        self.control.state_dir.mkdir(parents=True)
+        self.control.load_state = Mock(return_value=payload)
+        self.control.validate_current_resources = Mock(
+            return_value={"association": True, "route_table": True, "security_group": True, "subnet": True, "vpc": True}
+        )
+
+        def response(*arguments: str) -> dict:
+            operation = arguments[1]
+            if operation == "describe-vpcs":
+                return {"Vpcs": [{"CidrBlock": MODULE.VPC_CIDR}]}
+            if operation == "describe-vpc-attribute":
+                value_key = "EnableDnsSupport" if "enableDnsSupport" in arguments else "EnableDnsHostnames"
+                return {value_key: {"Value": True}}
+            if operation == "describe-subnets":
+                return {"Subnets": [{"CidrBlock": MODULE.SUBNET_CIDR}]}
+            if operation == "describe-route-tables":
+                return {
+                    "RouteTables": [
+                        {"Routes": [{"DestinationCidrBlock": MODULE.VPC_CIDR, "GatewayId": "local", "State": "active"}]}
+                    ]
+                }
+            if operation == "describe-security-groups":
+                return {"SecurityGroups": [{"IpPermissions": []}]}
+            raise AssertionError(f"Unexpected operation: {arguments}")
+
+        self.control.cli.call = Mock(side_effect=response)
+        result = self.control.observe()
+        self.assertEqual(result["vpc_cidr"], "10.63.0.0/24")
+        self.assertEqual(result["subnet_cidr"], "10.63.0.0/28")
+        self.assertEqual(result["routes"], [{"destination": "10.63.0.0/24", "gateway": "local", "state": "active"}])
+        raw = json.loads(self.control.observation_file.read_text(encoding="utf-8"))
+        self.assertEqual(raw["vpc"]["Vpcs"][0]["CidrBlock"], MODULE.VPC_CIDR)
+        self.assertEqual(raw["subnet"]["Subnets"][0]["CidrBlock"], MODULE.SUBNET_CIDR)
+
+    def test_public_contract_keeps_cidrs_and_exact_wrapper_source_mapping(self) -> None:
+        readme = (ROOT / "README.md").read_text(encoding="utf-8")
+        wrapper = (ROOT / "scripts" / "aws-control-plane.sh").read_text(encoding="utf-8")
+        self.assertEqual(MODULE.VPC_CIDR, "10.63.0.0/24")
+        self.assertEqual(MODULE.SUBNET_CIDR, "10.63.0.0/28")
+        self.assertIn("`10.63.0.0/24`", readme)
+        self.assertIn("`10.63.0.0/28`", readme)
+        self.assertIn("aws sts get-caller-identity --query Account --output text", readme)
+        self.assertIn("[shell wrapper](scripts/aws-control-plane.sh)", readme)
+        self.assertIn("[Python source](scripts/aws_control_plane.py)", readme)
+        self.assertIn('PYTHON_SOURCE="${SCRIPT_DIR}/aws_control_plane.py"', wrapper)
+        self.assertIn('exec python3 "${PYTHON_SOURCE}" "$@"', wrapper)
+
 
 if __name__ == "__main__":
     unittest.main()
