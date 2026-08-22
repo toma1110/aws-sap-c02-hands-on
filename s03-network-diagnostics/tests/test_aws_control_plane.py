@@ -166,16 +166,10 @@ class ControlPlaneSafetyTests(unittest.TestCase):
         self.assertEqual(raw["vpc"]["Vpcs"][0]["CidrBlock"], MODULE.VPC_CIDR)
         self.assertEqual(raw["subnet"]["Subnets"][0]["CidrBlock"], MODULE.SUBNET_CIDR)
 
-    def test_public_contract_keeps_cidrs_and_exact_wrapper_source_mapping(self) -> None:
-        readme = (ROOT / "README.md").read_text(encoding="utf-8")
+    def test_cidrs_and_wrapper_source_mapping(self) -> None:
         wrapper = (ROOT / "scripts" / "aws-control-plane.sh").read_text(encoding="utf-8")
         self.assertEqual(MODULE.VPC_CIDR, "10.63.0.0/24")
         self.assertEqual(MODULE.SUBNET_CIDR, "10.63.0.0/28")
-        self.assertIn("`10.63.0.0/24`", readme)
-        self.assertIn("`10.63.0.0/28`", readme)
-        self.assertIn("aws sts get-caller-identity --query Account --output text", readme)
-        self.assertIn("[shell wrapper](scripts/aws-control-plane.sh)", readme)
-        self.assertIn("[Python source](scripts/aws_control_plane.py)", readme)
         self.assertIn('PYTHON_SOURCE="${SCRIPT_DIR}/aws_control_plane.py"', wrapper)
         self.assertIn('exec python3 "${PYTHON_SOURCE}" "$@"', wrapper)
 

@@ -1,23 +1,17 @@
 # ルート・名前解決・到達性から通信障害を絞る
 
-このハンズオンでは、通信障害を次の順で診断します。
+アプリケーションから接続できないとき、最初からすべての設定を調べると原因を見失いがちです。このハンズオンでは、固定データを使って次の順に確認し、最初に問題が見つかった場所へ調査を絞ります。
 
-1. ルート
-2. 名前解決
-3. セキュリティ制御
-4. 到達性
+1. 宛先へ向かうルートがあるか
+2. 接続先の名前をIPアドレスへ解決できるか
+3. セキュリティグループとネットワークACLが通信を許可しているか
+4. 経路の途中から宛先まで到達できるか
 
-前半は固定テストデータを使うため、AWS resourceを作成しません。後半は課金部品を含まない隔離VPCのコントロールプレーン設定だけを観察します。実際のpacket疎通やDNS queryの成功は証明しません。
-
-## 所要時間
-
-約18分です。準備2分、固定データ診断8分、AWS設定観察5分、cleanupと残存確認3分を目安にします。
+固定データの演習だけならAWSリソースは作成せず、約10分で終わります。希望する場合は、その後に隔離したVPCを作り、AWS上のルートやDNS設定を約8分で観察できます。
 
 ## 準備
 
-### 既定手順: AWS CloudShell
-
-AWS ConsoleでRegionを`us-east-1`に切り替えてCloudShellを開き、次を実行します。
+AWS CloudShellを開き、次のコマンドで教材を取得します。Python 3.11以降が必要ですが、追加パッケージはありません。
 
 ```bash
 git clone https://github.com/toma1110/aws-sap-c02-hands-on.git
@@ -25,163 +19,64 @@ cd aws-sap-c02-hands-on/s03-network-diagnostics
 python3 --version
 ```
 
-検証済み出力例です。Pythonのpatch versionは環境により異なります。
+`Python 3.11.x`のように表示されたら準備完了です。固定データの診断ではAWSへアクセスしないため、AWSの認証情報は使いません。
 
-```text
-Cloning into 'aws-sap-c02-hands-on'...
-Python 3.11.x
-```
+## 固定データで診断順序を体験する
 
-見る値は最後の`Python 3.11.x`です。3.11以降なら次へ進みます。clone、directory移動、version確認のどれかが失敗した場合は、修正するまでAWS resourceを作成しません。追加packageは不要です。
-
-AWS操作のpublic entrypointは[shell wrapper](scripts/aws-control-plane.sh)です。wrapperは同じdirectoryの[Python source](scripts/aws_control_plane.py)を`PYTHON_SOURCE`として解決し、そのexact fileだけを`exec`します。Python sourceが欠けている場合は終了code 2で停止します。
-
-Python 3.11以降があれば、前半の診断とunit testだけはローカルでも実行できます。AWS credentialをローカルへ追加する必要はありません。AWS設定の観察とcleanupはCloudShellで行います。
-
-### 必要権限
-
-- `sts:GetCallerIdentity`
-- `ec2:CreateVpc`、`ec2:ModifyVpcAttribute`、`ec2:CreateSubnet`
-- `ec2:CreateRouteTable`、`ec2:AssociateRouteTable`
-- `ec2:CreateSecurityGroup`、`ec2:CreateTags`
-- `ec2:DescribeAvailabilityZones`、`ec2:DescribeVpcs`、`ec2:DescribeVpcAttribute`
-- `ec2:DescribeSubnets`、`ec2:DescribeRouteTables`、`ec2:DescribeSecurityGroups`
-- `ec2:DisassociateRouteTable`、`ec2:DeleteRouteTable`、`ec2:DeleteSecurityGroup`、`ec2:DeleteSubnet`、`ec2:DeleteVpc`
-
-## 料金と影響範囲
-
-VPC、subnet、custom route table、security groupを各1個だけ作ります。EC2 instance、NAT Gateway、VPC endpoint、Route 53 private hosted zone、Reachability Analyzer、Internet Gatewayは作りません。既定構成のコントロールプレーンresource自体には時間課金を見込んでいません。
-
-実行前に[AWS公式のAmazon VPC料金](https://aws.amazon.com/vpc/pricing/)を確認してください。手順を変えて課金対象の接続や分析を加えた場合は別途料金が発生します。
-
-VPCは`10.63.0.0/24`、subnetは`10.63.0.0/28`です。他VPCやInternet Gatewayへの接続はなく、既存networkのroute、DNS、security groupは変更しません。
-
-## 1. 固定データで診断する
-
-### 正常系
+最初に、すべての確認を通過するデータを診断します。
 
 ```bash
 python3 diagnose.py fixtures/scenarios.json healthy
 ```
 
-検証済み出力です。
+結果はJSONで表示されます。主に次の3点を読みます。
 
-```json
-{
-  "dataset_version": "network-diagnostics-v1",
-  "scenario": "healthy",
-  "decision": "HEALTHY",
-  "checked_stages": ["route", "dns", "security", "reachability"],
-  "evidence": [
-    {"stage": "route", "passed": true, "detail": "宛先CIDRに一致するルートと転送先がある"},
-    {"stage": "dns", "passed": true, "detail": "期待するプライベート名が想定したIPアドレスへ解決される"},
-    {"stage": "security", "passed": true, "detail": "セキュリティグループとネットワークACLが確認対象の通信を許可している"},
-    {"stage": "reachability", "passed": true, "detail": "固定した到達性の観測結果が宛先まで到達している"}
-  ]
-}
-```
+- `decision`: 最初に問題が見つかった場所。問題がなければ`HEALTHY`
+- `checked_stages`: 実際に確認した項目と順序
+- `evidence`: 各項目で分かったこと
 
-見るfield pathは`.decision`、`.checked_stages`、`.evidence[*].passed`です。`HEALTHY`、4段階、すべて`true`なら次へ進みます。一つでも違う場合はfixtureと実行directoryを確認し、AWS側は変更しません。
+正常なデータでは、ルート、DNS、セキュリティ制御、到達性の4項目が順番に確認され、`decision`は`HEALTHY`になります。
 
-### ルート不足
+次に、問題の場所が異なる4つのデータを診断します。
 
 ```bash
 python3 diagnose.py fixtures/scenarios.json route-missing
-```
-
-検証済み出力です。
-
-```json
-{
-  "dataset_version": "network-diagnostics-v1",
-  "scenario": "route-missing",
-  "decision": "ROUTE",
-  "checked_stages": ["route"],
-  "evidence": [
-    {"stage": "route", "passed": false, "detail": "宛先CIDRに一致するルートがない"}
-  ]
-}
-```
-
-見るfield pathは`.decision`と`.evidence[0]`です。`ROUTE`かつ`stage=route`、`passed=false`なら次へ進みます。それ以外なら停止します。
-
-### DNS転送不足
-
-```bash
 python3 diagnose.py fixtures/scenarios.json dns-forwarding-missing
-```
-
-検証済み出力です。
-
-```json
-{
-  "dataset_version": "network-diagnostics-v1",
-  "scenario": "dns-forwarding-missing",
-  "decision": "DNS",
-  "checked_stages": ["route", "dns"],
-  "evidence": [
-    {"stage": "route", "passed": true, "detail": "宛先CIDRに一致するルートと転送先がある"},
-    {"stage": "dns", "passed": false, "detail": "オンプレミス側のドメイン名に一致するDNS転送ルールがない"}
-  ]
-}
-```
-
-見るfield pathは`.decision`と`.evidence[1]`です。`DNS`かつ`stage=dns`、`passed=false`なら次へ進みます。それ以外なら停止します。
-
-### セキュリティ制御の拒否
-
-```bash
 python3 diagnose.py fixtures/scenarios.json security-blocked
-```
-
-検証済み出力です。
-
-```json
-{
-  "dataset_version": "network-diagnostics-v1",
-  "scenario": "security-blocked",
-  "decision": "SECURITY",
-  "checked_stages": ["route", "dns", "security"],
-  "evidence": [
-    {"stage": "route", "passed": true, "detail": "宛先CIDRに一致するルートと転送先がある"},
-    {"stage": "dns", "passed": true, "detail": "期待するプライベート名が想定したIPアドレスへ解決される"},
-    {"stage": "security", "passed": false, "detail": "宛先のセキュリティグループが確認対象のポートを許可していない"}
-  ]
-}
-```
-
-見るfield pathは`.decision`と`.evidence[2]`です。`SECURITY`かつ`stage=security`、`passed=false`なら次へ進みます。それ以外なら停止します。
-
-### 到達性の失敗
-
-```bash
 python3 diagnose.py fixtures/scenarios.json reachability-blocked
 ```
 
-検証済み出力です。
+表示された`decision`と`checked_stages`を比べてください。
 
-```json
-{
-  "dataset_version": "network-diagnostics-v1",
-  "scenario": "reachability-blocked",
-  "decision": "REACHABILITY",
-  "checked_stages": ["route", "dns", "security", "reachability"],
-  "evidence": [
-    {"stage": "route", "passed": true, "detail": "宛先CIDRに一致するルートと転送先がある"},
-    {"stage": "dns", "passed": true, "detail": "期待するプライベート名が想定したIPアドレスへ解決される"},
-    {"stage": "security", "passed": true, "detail": "セキュリティグループとネットワークACLが確認対象の通信を許可している"},
-    {"stage": "reachability", "passed": false, "detail": "固定した経路の中継先が利用できないと観測された"}
-  ]
-}
-```
+| データ | 最初に分かる問題 | そこまでに確認する項目 |
+| --- | --- | --- |
+| `route-missing` | 宛先CIDRに一致するルートがない | ルート |
+| `dns-forwarding-missing` | オンプレミスのドメインに合うDNS転送ルールがない | ルート → DNS |
+| `security-blocked` | 宛先のセキュリティグループがポートを許可していない | ルート → DNS → セキュリティ制御 |
+| `reachability-blocked` | 経路の中継先を利用できない | ルート → DNS → セキュリティ制御 → 到達性 |
 
-見るfield pathは`.decision`と`.evidence[3]`です。`REACHABILITY`かつ`stage=reachability`、`passed=false`なら固定データの診断は完了です。終了code 2と`INVALID_INPUT`が出た場合は、欠けた入力を推測せずfixtureを確認します。
+前の項目に問題があれば、後ろの項目を先に調べても原因は確定できません。たとえばDNSの問題を調べる前に、宛先へ向かうルートがあることを確認します。この順序を実際の障害調査にも使えます。
 
-## 2. AWS設定を観察する
+`INVALID_INPUT`と表示された場合は、コマンドを実行したディレクトリ、データのファイル名、シナリオ名を確認してください。入力が不足している状態でAWS設定を推測して変更する必要はありません。
 
-### accountとRegionを固定する
+## 任意: AWS上の設定を観察する
 
-現在ログイン中のaccount IDをAWS STSから取得します。IDを手入力しません。
+ここからはVPC、サブネット、カスタムルートテーブル、セキュリティグループを1つずつ作ります。EC2インスタンス、NAT Gateway、VPCエンドポイント、Route 53プライベートホストゾーン、Reachability Analyzer、Internet Gatewayは作成しません。他のVPCへ接続せず、既存ネットワークの設定も変更しません。
+
+ここで作成するリソース自体に時間料金はありませんが、AWSの料金体系は変更されることがあります。実行前に[Amazon VPCの料金](https://aws.amazon.com/vpc/pricing/)を確認してください。手順にない接続や分析を追加すると、別途料金が発生する場合があります。
+
+### 必要な権限
+
+実行するIAMユーザーまたはロールには、次の権限が必要です。
+
+- 本人確認: `sts:GetCallerIdentity`
+- 作成と設定: `ec2:CreateVpc`、`ec2:ModifyVpcAttribute`、`ec2:CreateSubnet`、`ec2:CreateRouteTable`、`ec2:AssociateRouteTable`、`ec2:CreateSecurityGroup`、`ec2:CreateTags`
+- 観察: `ec2:DescribeAvailabilityZones`、`ec2:DescribeVpcs`、`ec2:DescribeVpcAttribute`、`ec2:DescribeSubnets`、`ec2:DescribeRouteTables`、`ec2:DescribeSecurityGroups`
+- 後片付け: `ec2:DisassociateRouteTable`、`ec2:DeleteRouteTable`、`ec2:DeleteSecurityGroup`、`ec2:DeleteSubnet`、`ec2:DeleteVpc`
+
+### 1. AWSアカウントとリージョンを確認する
+
+CloudShellで次を実行します。
 
 ```bash
 export AWS_REGION="us-east-1"
@@ -189,47 +84,27 @@ export EXPECTED_ACCOUNT_ID="$(aws sts get-caller-identity --query Account --outp
 printf 'Account=%s Region=%s\n' "$EXPECTED_ACCOUNT_ID" "$AWS_REGION"
 ```
 
-実値を伏せた検証済み出力例です。
+表示された12桁のアカウントIDが演習に使うアカウントと一致し、リージョンが`us-east-1`であることを目で確認してください。一致しない場合は、ここで操作を止めて正しいアカウントへログインし直します。
 
-```text
-Account=111122223333 Region=us-east-1
-```
+この演習で使うCIDRは、VPCが`10.63.0.0/24`、サブネットが`10.63.0.0/28`です。作成用スクリプトも、実際のアカウントやリージョンがここで指定した値と違う場合は処理を止めます。
 
-見る値はSTS応答の`Account`を入れた`EXPECTED_ACCOUNT_ID`と`AWS_REGION`です。account IDが12桁でRegionが`us-east-1`なら次へ進みます。空、`None`、12桁以外、別Regionならresourceを作成しません。wrapperも実accountとの不一致を検出すると終了code 2で停止します。
-
-### 作成する
+### 2. 観察用リソースを作る
 
 ```bash
 bash scripts/aws-control-plane.sh create
 ```
 
-IDとaccountを伏せた検証済み出力例です。
+作成したVPC、サブネット、ルートテーブル、セキュリティグループのIDが表示されます。これらのIDは`.s03-state/aws-state.json`にも保存され、後片付けの対象を特定するために使われます。
 
-```json
-{
-  "created": {
-    "schema_version": 1,
-    "name": "sapc02-s03-network-diag",
-    "account_id": "111122223333",
-    "region": "us-east-1",
-    "vpc_id": "vpc-<redacted>",
-    "subnet_ids": ["subnet-<redacted>"],
-    "route_table_id": "rtb-<redacted>",
-    "association_id": "rtbassoc-<redacted>",
-    "security_group_id": "sg-<redacted>"
-  }
-}
-```
+エラーになった場合は、同じコマンドを繰り返す前にメッセージを確認してください。途中まで作成されている可能性があるため、`.s03-state/aws-state.json`は削除せず、後述の後片付けを実行します。
 
-見るfield pathは`.created.account_id`、`.created.region`、`.created.vpc_id`、`.created.subnet_ids[0]`、`.created.route_table_id`、`.created.association_id`、`.created.security_group_id`です。accountとRegionが一致し、IDがすべて空でなければ観察へ進みます。終了code 2、`error`、ID欠落、collisionの場合は再実行せず、`.s03-state/aws-state.json`を保持してexact IDを確認します。
-
-### 観察する
+### 3. ルートとDNS設定を見る
 
 ```bash
 bash scripts/aws-control-plane.sh observe
 ```
 
-既存のAWS検証結果から再現した、IDを含まない検証済み出力です。
+出力は次のようになります。リソースIDを含む詳細は`.s03-state/aws-observation.json`へ保存されます。
 
 ```json
 {
@@ -245,67 +120,42 @@ bash scripts/aws-control-plane.sh observe
 }
 ```
 
-同時に`.s03-state/aws-observation.json`へ保存されるraw JSONの、IDを伏せた検証済み抜粋です。
+この結果から、VPCとサブネットのCIDR、VPCのDNS機能が有効であること、ローカルルートが有効であること、作成したセキュリティグループに受信ルールがないことを確認できます。この観察はAWSの設定情報を読んだものであり、実際のパケット通信やDNSクエリを実行した結果ではありません。
 
-```json
-{
-  "vpc": {"Vpcs": [{"CidrBlock": "10.63.0.0/24", "State": "available", "VpcId": "vpc-<redacted>"}]},
-  "dns_support": {"EnableDnsSupport": {"Value": true}},
-  "dns_hostnames": {"EnableDnsHostnames": {"Value": true}},
-  "subnet": {"Subnets": [{"CidrBlock": "10.63.0.0/28", "State": "available", "SubnetId": "subnet-<redacted>"}]},
-  "route_table": {"RouteTables": [{"Routes": [{"DestinationCidrBlock": "10.63.0.0/24", "GatewayId": "local", "State": "active"}]}]},
-  "security_group": {"SecurityGroups": [{"IpPermissions": []}]}
-}
-```
+## 後片付け
 
-見るfield pathは`vpc.Vpcs[0].CidrBlock`、`subnet.Subnets[0].CidrBlock`、`dns_support.EnableDnsSupport.Value`、`dns_hostnames.EnableDnsHostnames.Value`、`route_table.RouteTables[0].Routes`、`security_group.SecurityGroups[0].IpPermissions`です。CIDRが`10.63.0.0/24`と`10.63.0.0/28`、DNSの2値が`true`、routeが`10.63.0.0/24 → local / active`の1件、inboundが空ならcleanupへ進みます。一つでも違う場合は設定変更で合わせず、state fileを保持してcleanupを優先します。
-
-## 3. cleanupする
-
-作成時のstateに記録したexact IDだけを削除します。tag prefixによる一括削除は行いません。
+AWS上の設定を観察した場合は、演習を終える前に必ず実行します。
 
 ```bash
 bash scripts/aws-control-plane.sh cleanup
-```
-
-検証済み出力です。
-
-```json
-{
-  "cleanup_requests_completed": true
-}
-```
-
-見るfield pathは`.cleanup_requests_completed`です。`true`は削除requestの完了であり、残存0の証明ではありません。終了code 0と`true`を確認したら必ず`residual`へ進みます。終了code 2または`error`ならstate fileを削除せず、exact IDを確認して同じcleanupを再開します。
-
-```bash
 bash scripts/aws-control-plane.sh residual
 ```
 
-IDを伏せた検証済み出力です。
+スクリプトは、作成時に保存したIDを使い、ルートテーブルの関連付け、カスタムルートテーブル、セキュリティグループ、サブネット、VPCの順に削除します。名前が似ているリソースや既存リソースは削除しません。
+
+最後のコマンドで次のように表示されれば、演習で作成したリソースは残っていません。
 
 ```json
-{
-  "remaining": []
-}
+{"remaining": []}
 ```
 
-見るfield pathは`.remaining`です。空配列かつ終了code 0ならcleanup完了で、scriptが`.s03-state`を削除します。要素が残る場合は終了code 1となるため完了扱いにせず、表示されたexact IDだけを確認してcleanupを再実行します。state fileがない場合は残存0を推測せず、終了code 2で停止します。
+リソースが残っている場合は、そのIDが表示されます。少し待ってから`cleanup`と`residual`をもう一度実行してください。エラーになった場合も状態ファイルは手動で削除しないでください。削除すると、スクリプトが安全に対象を特定できなくなります。
 
-削除順序はroute table association、custom route table、security group、subnet、VPCです。削除済みresourceは飛ばして残りを処理します。既存resourceや名前の似たresourceは削除しません。
+## 困ったとき
 
-## テスト
+- `python3: command not found`またはPython 3.10以前が表示される: AWS CloudShellでやり直すか、Python 3.11以降を用意します。
+- `unknown scenario`が表示される: 上記に記載したシナリオ名と、現在のディレクトリを確認します。
+- `Account mismatch`または`State Region does not match`が表示される: リソースを変更せず、ログイン中のアカウントと`AWS_REGION`を確認します。
+- `State already exists`または`Tagged resource collision`が表示される: 重複作成はせず、保存されているIDを確認して後片付けへ進みます。
+- `cleanup`でエラーになる: `.s03-state/aws-state.json`を残したまま、必要権限と表示されたリソースIDを確認してから同じコマンドを再実行します。
+- `residual`でリソースが表示される: そのIDだけが演習で作成したものか確認し、`cleanup`を再実行します。AWS Consoleから名前だけで一括削除しないでください。
+
+## 実装のテスト
+
+スクリプトを変更した場合や、動作を自分で確認したい場合は次を実行します。
 
 ```bash
 python3 -m unittest discover -s tests -v
 ```
 
-検証済み出力の末尾です。
-
-```text
-Ran 16 tests
-
-OK
-```
-
-見る値は`Ran 16 tests`、`OK`、終了code 0です。そろえば完了です。`FAILED`、`ERROR`、終了code非0なら公開やAWS操作へ進みません。診断の正常・故障・fail-closedに加え、account/Region不一致、tag改変、collision、部分cleanup、残存確認、CIDR、wrapperとPython sourceのexact対応も検査します。
+`Ran 16 tests`に続いて`OK`と表示されれば、診断処理とAWS操作の安全機能が期待どおりに動いています。
